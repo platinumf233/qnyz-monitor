@@ -1,63 +1,30 @@
 name: qnyz-monitor
-
 on:
-  # 定时有两条路，二选一，当前用的是【首选】。详见 README「定时触发」。
-  #
-  # 【首选】外部定时服务（如 cron-job.org）按固定间隔调 GitHub API，走下面的
-  #   workflow_dispatch 入口。准点，间隔可低至 5 分钟：
-  #     POST https://api.github.com/repos/<owner>/<repo>/actions/workflows/monitor.yml/dispatches
-  #     headers: Authorization: Bearer <PAT>, Accept: application/vnd.github+json
-  #     body:    {"ref":"main"}
-  #
-  # 【替代】用不了外部服务时（不想配 PAT、定时服务停了或要收费），取消下面两行
-  #   注释改用 GitHub 自带 schedule，并把外部服务那边的任务停掉——两条路没必要
-  #   同时开，同时开只是多跑几遍（去重状态共用，不会重复推）。
-  #   注意 schedule 不保证执行：本仓库实测 */10 和每 30 分钟的 cron 一次都没触发
-  #   过，频率越低越可能真的跑起来，所以这里给的是每小时。
-  # schedule:
-  #   - cron: "23 * * * *"
-  workflow_dispatch: {}       # 手动触发 + 外部服务定时触发（首选入口）
-
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch: {}
 permissions:
   contents: read
-
 concurrency:
   group: qnyz-monitor
   cancel-in-progress: false
-
 jobs:
   check:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false        # 一组失败不影响另一组
-      matrix:
-        include:
-          - name: A            # 入住 9/5 → 离店 9/12，只盯友间宁国路
-            config: config.ci.a.yaml
-          # 暂停：恢复时取消下面两行注释
-          - name: B
-            config: config.ci.b.yaml
-    name: check-${{ matrix.name }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      - name: Install deps
-        run: pip install requests PyYAML
-
-      # 每组独立的去重缓存（key 前缀含组名，互不覆盖）
-      - name: Restore dedup state (${{ matrix.name }})
-        uses: actions/cache@v4
+          python-version: '3.12'
+      - run: pip install requests PyYAML
+      - run: python -m unittest test_deployment.py
+      - uses: actions/cache@v4
         with:
-          path: state.json
-          key: qnyz-state-${{ matrix.name }}-${{ github.run_id }}
-          restore-keys: |
-            qnyz-state-${{ matrix.name }}-
-
-      - name: Run check (${{ matrix.name }})
+          path: flexible-state.json
+          key: qnyz-flexible-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: qnyz-flexible-v1-
+      - name: Check flexible 15-night stays and notify WeChat
         env:
           QNYZ_NOTIFY_URL: ${{ secrets.BARK_URL }}
-        run: python monitor.py --once --config ${{ matrix.config }}
+        run: python flexible_monitor.py
