@@ -5,6 +5,19 @@ import flexible_monitor as fm
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_partial_queries_still_produce_hits_and_use_personal_endpoint(self):
+        client = Mock()
+        client.list_houses.side_effect = [[{'id': '1', 'name': 'A', 'district': 'X'}]] + [RuntimeError('offline')] * 16
+        hits = fm.collect(client, date(2026, 9, 17))
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(client.list_houses.call_args_list[0].kwargs['hous_type'], 0)
+
+    def test_all_queries_failed_is_not_reported_as_no_vacancies(self):
+        client = Mock()
+        client.list_houses.side_effect = RuntimeError('offline')
+        with self.assertRaises(RuntimeError):
+            fm.collect(client, date(2026, 9, 17))
+
     def test_booking_window_and_fifteen_nights(self):
         periods = fm.periods(date(2026, 9, 17))
         self.assertEqual(periods[0], ('2026-09-21', '2026-10-06'))

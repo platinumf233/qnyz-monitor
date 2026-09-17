@@ -6,7 +6,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from monitor import apply_filters, get_stations
 from qnyz_client import QnyzClient
 
 STATE = Path('flexible-state.json')
@@ -48,18 +47,13 @@ def send_wechat(title, body):
     logging.info('ServerChan accepted notification')
 
 
-def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    today = datetime.now(timezone(timedelta(hours=8))).date()
-    state = json.loads(STATE.read_text(encoding='utf-8')) if STATE.exists() else {}
-    client = QnyzClient(verify=False, retries=2)
+def collect(client, today):
     hits = {}
     failures = 0
     for arrival, departure in periods(today):
-        cfg = {'filters': {'date_from': arrival, 'date_to': departure,
-                           'apply_scope': 'personal', 'user_type': 2}}
         try:
-            stations = apply_filters(get_stations(client, cfg), cfg)
+            stations = client.list_houses(hous_type=0, user_type=2,
+                                         start_time=arrival, end_time=departure)
             for station in stations:
                 key = f"{arrival}|{departure}|{station['id']}"
                 hits[key] = f"{station.get('name', '')} [{station.get('district', '')}] {arrival} → {departure}（15晚）"
@@ -67,9 +61,20 @@ def main():
         except Exception as exc:
             failures += 1
             logging.error('%s lookup failed: %s', arrival, type(exc).__name__)
+    if failures == len(periods(today)):
+        raise RuntimeError('All arrival-date queries failed; retaining previous state')
     if failures:
-        raise RuntimeError(f'{failures} arrival-date queries failed; retaining previous state')
+        logging.warning('%d dates unavailable this round; retry next run', failures)
     logging.info('Total matching stays: %d', len(hits))
+    return hits
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    today = datetime.now(timezone(timedelta(hours=8))).date()
+    state = json.loads(STATE.read_text(encoding='utf-8')) if STATE.exists() else {}
+    client = QnyzClient(verify=False, retries=2, timeout=(8, 20))
+    hits = collect(client, today)
     deliver(hits, state, str(today), send_wechat)
     STATE.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
 
